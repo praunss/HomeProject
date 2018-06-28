@@ -28,7 +28,7 @@ from keras.callbacks import ModelCheckpoint
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
-
+import quandl
 
 # Run with : python AnomalyPipelineLuigi.py --scheduler-host localhost RunTrafoAnomalyDetection --unitname DOM_UNIT_5_FAN_1B --root "D:/syncplicity/z002z5tk/Fabian/dev/Python/MDAprojects/VFDAN/VFDAN_usecases/Anomaly linear/Pipe"
 #####################
@@ -38,7 +38,7 @@ class GetData(luigi.Task):
     def requires(self):
         None
     def run(self):
-        import quandl
+
         quandl.ApiConfig.api_key = "U5cJSsnv4Ad7UUnHNGu8"
         companies = ["WIKI/ATVI.11", "WIKI/ADBE.11", "WIKI/AKAM.11", "WIKI/ALXN.11", "WIKI/GOOGL.11", "WIKI/AMZN.11",
                      "WIKI/AAL.11", "WIKI/AMGN.11", "WIKI/ADI.11", "WIKI/AAPL.11", "WIKI/AMAT.11", "WIKI/ADSK.11",
@@ -71,7 +71,7 @@ class GetData(luigi.Task):
         print("Getting quandl data...")
         self.mydata = quandl.get(companies, start_date="2012-01-01", end_date=RequestDate)
         tickerend = time.time()
-        print(tickerend - tickerstart)
+        print("Data downloaded in {} s".format((tickerend - tickerstart))
 
         # save as csv with current date
         with self.output().open('w') as outfile:
@@ -88,49 +88,51 @@ class CheckInputforNans(luigi.Task):
         return GetData()
 
     def run(self):
-
         # load from target
         self.mydata = pd.read_csv(self.input().path)
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
-
+        if NumberofRowNans > 5:
+            raise ValueError("More than 5 NaNs in downloaded data")
+        # If fewer Nans, fill with bfill method
         self.mydata = self.mydata.fillna(method="bfill")
         NumberofRowNansAC = len(self.mydata[self.mydata.isnull().any(axis=1)])
         if NumberofRowNansAC > 0:
-            raise ValueError("Nans in data, cannot be filled artifically")
-        with self.output().open('w') as outfile:
+            raise ValueError("Nans in data, cannot be filled artificially")
+        with self.output()["NoNaNs"].open('w') as outfile:
             self.mydata.to_csv(outfile)
 
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
-        return luigi.LocalTarget("Data/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv")
+        return {"NoNaNs": luigi.LocalTarget("Data/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
+        "RawData" : self.input() }
 
 
 class PrepareDataForANN(luigi.Task):
+    PredictionTimepoints = luigi.Parameter()
+
     def requires(self):
-        return CheckInputforNans()
+        return CheckInputforNans(self.PredictionTimepoints)
 
     def run(self):
-
         # Data preparation
-        self.mydata = pd.read_csv(self.input().path)
+        self.mydata = pd.read_csv(self.input()["NoNaNs"].path)
         self.mydata[['Date']] = self.mydata[['Date']].apply(pd.to_datetime, errors='ignore')
         self.mydata = self.mydata.set_index(self.mydata["Date"])
         self.mydata = self.mydata.drop("Date", axis=1)
 
         NumberofCompanies = self.mydata.shape[1]
-        # Define starting point for target and number of timepoints that are used as input (org: 250, 250)
-        PredictionTimepoints = 2
-        FirstIndex = PredictionTimepoints
+
+        FirstIndex = self.PredictionTimepoints
         MaxPoints = self.mydata.shape[0] - FirstIndex
 
         MLP = True  # False => CNN
         normalization = True
 
         # create np array for Data Collection
-        DataCollection = np.empty([1, PredictionTimepoints, NumberofCompanies])
+        DataCollection = np.empty([1, self.PredictionTimepoints, NumberofCompanies])
         # Create np array for Target Collection
         TargetCollection = np.empty([1, NumberofCompanies])
 
@@ -158,7 +160,7 @@ class PrepareDataForANN(luigi.Task):
 
             # START CREATE INPUT VECTORS (IMAGES)
             end = toPredictIndex  # e.g. first = 250
-            start = end - PredictionTimepoints  # e.g. first = 0
+            start = end - self.PredictionTimepoints  # e.g. first = 0
 
             AdjCloseTemp = mydataPP.iloc[start: end]  # e.g. 0 - 249 inclusive, as last index is not sliced
 
@@ -174,42 +176,93 @@ class PrepareDataForANN(luigi.Task):
         DataCollection = DataCollection[1:DataCollection.shape[0], :, :]
         TargetCollection = TargetCollection[1:TargetCollection.shape[0], :]
 
+        print("#############################")
         print("Data Shape prepared for ANN:")
         print(DataCollection.shape)
+        print("#############################")
 
-
-        # Define number of Training samples (70 %), Validation (15%) and Testsamples (15%)
+        # Define number of Training samples (85 %), Validation (15%)
         TrainingSamples = int(MaxPoints * 0.85)
         ValidationSamples = int(MaxPoints - TrainingSamples)
-        TestSamples = MaxPoints - TrainingSamples - ValidationSamples
         self.X_train = np.copy(DataCollection[:TrainingSamples, :])
         self.y_train = np.copy(TargetCollection[:TrainingSamples, :])
         self.X_valid = np.copy(DataCollection[TrainingSamples - 1:, :])
         self.y_valid = np.copy(TargetCollection[TrainingSamples - 1:, :])
-        # X_test = np.copy(DataCollection[TrainingSamples + ValidationSamples - 1:, :])
-        #y_test = np.copy(TargetCollection[TrainingSamples + ValidationSamples - 1:, :])
-        print("Trainingsamples:")
-        print(self.X_train.shape)
+
+        print("#############################")
+        print("Trainingsamples: {}".format(self.X_train.shape))
+        print("#############################")
 
         with self.output()["X_train"].open('w') as outfile:
-            self.X_train.to_csv(outfile)
+            np.save(outfile, self.X_train)
         with self.output()["y_train"].open('w') as outfile:
-            self.y_train.to_csv(outfile)
+            np.save(outfile, self.y_train)
         with self.output()["X_valid"].open('w') as outfile:
-            self.X_valid.to_csv(outfile)
+            np.save(outfile, self.X_valid)
         with self.output()["y_valid"].open('w') as outfile:
-            self.y_valid.to_csv(outfile)
+            np.save(outfile, self.y_valid)
 
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
-        return {"X_train": luigi.LocalTarget("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".csv"),
-                "y_train": luigi.LocalTarget("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".csv"),
-                "X_valid": luigi.LocalTarget("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".csv"),
-                "y_valid": luigi.LocalTarget("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".csv")
+        return {"X_train": luigi.LocalTarget("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
+                "y_train": luigi.LocalTarget("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
+                "X_valid": luigi.LocalTarget("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
+                "y_valid": luigi.LocalTarget("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
+                "RawData": self.input()["RawData"],
+                "NoNaNs": self.input()["NoNaNs"]
                 }
 
+class LearnModel(luigi.Task):
+    PredictionTimepoints = luigi.Parameter()
 
+    def MLP_B2(self):
+        model = Sequential()
+        model.add(Flatten(input_shape=(self.PredictionTimepoints, NumberofCompanies)))
+
+        # model.add(Dense(5000, activation='relu'))
+        model.add(Dense(2000, activation='relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(1000, activation='relu'))
+        model.add(Dropout(0.2))
+        model.add(Dense(500, activation='relu'))
+        model.add(Dense(500, activation='relu'))
+        model.add(Dense(87))
+        model.compile(loss='mean_squared_error', optimizer="adamax", metrics=['mse'])
+
+        return model
+
+    def requires(self):
+        return PrepareDataForANN(self.PredictionTimepoints)
+
+    def run(self):
+        # Load required (prepared) data
+        X_train = np.load(self.input()["X_train"].path)
+        y_train = np.load(self.input()["y_train"].path)
+        X_valid = np.load(self.input()["X_valid"].path)
+        y_valid = np.load(self.input()["y_valid"].path)
+
+        NumberofCompanies = self.X_train.shape[1]
+        epochs = 2000
+
+        # fix random seed for reproducibility
+        seed = 7
+        np.random.seed(seed)
+
+        # build estimator
+        estimator = KerasRegressor(build_fn=MLP_B2, epochs=epochs, batch_size=X_train.shape[0], verbose=1)
+
+        Delta = datetime.timedelta(days=1)
+        self.now = datetime.datetime.now() - Delta
+
+        # Enter checkpoint filename here
+        checkpointer = ModelCheckpoint(filepath='saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' + str(
+            self.PredictionTimepoints) + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day)'.hdf5',
+                                       verbose=1, save_best_only=True)
+
+        estimator.fit(X_train, y_train, validation_data=(X_valid, y_valid), callbacks=[checkpointer])
+
+   
 if __name__ == '__main__':
                     ###############################
                     # OPTIONAL for Slackbot => sends notification to slack
