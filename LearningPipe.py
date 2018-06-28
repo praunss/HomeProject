@@ -4,35 +4,20 @@ import pandas as pd
 import numpy as np
 from numpy import newaxis
 import datetime
-from datetime import timedelta
-import seaborn as sn
-from pandas import Series
-from matplotlib import pyplot
-from pandas import Series
-from matplotlib import pyplot
-# Pretty display for notebooks
 
-from IPython.display import display # Allows the use of display() for DataFrames
-from matplotlib import pyplot as plt
-from timeit import default_timer as timer
-from matplotlib.pyplot import savefig
 import time
-from scipy.misc import imresize
+
 from sklearn.preprocessing import MinMaxScaler
-from keras.layers import Conv2D, MaxPooling2D, GlobalAveragePooling2D, LSTM, SimpleRNN
 from keras.layers import Dropout, Flatten, Dense
 from keras.models import Sequential
 from keras.models import Model
 from keras.wrappers.scikit_learn import KerasRegressor
 from keras.callbacks import ModelCheckpoint
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import KFold
-from sklearn.preprocessing import StandardScaler
 import quandl
 
-# Run with : python AnomalyPipelineLuigi.py --scheduler-host localhost RunTrafoAnomalyDetection --unitname DOM_UNIT_5_FAN_1B --root "D:/syncplicity/z002z5tk/Fabian/dev/Python/MDAprojects/VFDAN/VFDAN_usecases/Anomaly linear/Pipe"
+# Run with : python LearningPipe.py --scheduler-host localhost LearnModel --PredictionTimepoints 2
 #####################
-# NOTE FH : TO FIX: X_train etc are numpy array, cannot be saved with pd.to_csv!
+# NOTE FH : TO FIX:
 #######################
 class GetData(luigi.Task):
     def requires(self):
@@ -69,17 +54,18 @@ class GetData(luigi.Task):
             RequestDate += str(0)
         RequestDate += str(self.now.day)
         print("Getting quandl data...")
-        self.mydata = quandl.get(companies, start_date="2012-01-01", end_date=RequestDate)
+        self.mydata = quandl.get(companies, start_date="2018-01-01", end_date=RequestDate)
         tickerend = time.time()
-        print("Data downloaded in {} s".format((tickerend - tickerstart))
+        print("Data downloaded in {} s".format((tickerend - tickerstart)))
 
         # save as csv with current date
         with self.output().open('w') as outfile:
-            self.mydata.to_csv(outfile)
+                self.mydata.to_csv(outfile)
 
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
+
         return luigi.LocalTarget("Data/Data-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
 
 
@@ -106,17 +92,19 @@ class CheckInputforNans(luigi.Task):
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
+
         return {"NoNaNs": luigi.LocalTarget("Data/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
-        "RawData" : self.input() }
+                "RawData" : self.input() }
 
 
 class PrepareDataForANN(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
     def requires(self):
-        return CheckInputforNans(self.PredictionTimepoints)
+        return CheckInputforNans()
 
     def run(self):
+        self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
         self.mydata = pd.read_csv(self.input()["NoNaNs"].path)
         self.mydata[['Date']] = self.mydata[['Date']].apply(pd.to_datetime, errors='ignore')
@@ -193,14 +181,14 @@ class PrepareDataForANN(luigi.Task):
         print("Trainingsamples: {}".format(self.X_train.shape))
         print("#############################")
 
-        with self.output()["X_train"].open('w') as outfile:
-            np.save(outfile, self.X_train)
-        with self.output()["y_train"].open('w') as outfile:
-            np.save(outfile, self.y_train)
-        with self.output()["X_valid"].open('w') as outfile:
-            np.save(outfile, self.X_valid)
-        with self.output()["y_valid"].open('w') as outfile:
-            np.save(outfile, self.y_valid)
+        #with self.output()["X_train"].open('w') as outfile:
+        np.save("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.X_train)
+        #with self.output()["y_train"].open('w') as outfile:
+        np.save("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.y_train)
+        #with self.output()["X_valid"].open('w') as outfile:
+        np.save("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.X_valid)
+        #with self.output()["y_valid"].open('w') as outfile:
+        np.save("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.y_valid)
 
     def output(self):
         Delta = datetime.timedelta(days=1)
@@ -216,7 +204,7 @@ class PrepareDataForANN(luigi.Task):
 class LearnModel(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
-    def MLP_B2(self):
+    def MLP_B2(self, NumberofCompanies):
         model = Sequential()
         model.add(Flatten(input_shape=(self.PredictionTimepoints, NumberofCompanies)))
 
@@ -236,12 +224,14 @@ class LearnModel(luigi.Task):
         return PrepareDataForANN(self.PredictionTimepoints)
 
     def run(self):
+        self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Load required (prepared) data
         X_train = np.load(self.input()["X_train"].path)
         y_train = np.load(self.input()["y_train"].path)
         X_valid = np.load(self.input()["X_valid"].path)
         y_valid = np.load(self.input()["y_valid"].path)
 
+        print(X_train[:5])
         NumberofCompanies = self.X_train.shape[1]
         epochs = 2000
 
@@ -250,19 +240,20 @@ class LearnModel(luigi.Task):
         np.random.seed(seed)
 
         # build estimator
-        estimator = KerasRegressor(build_fn=MLP_B2, epochs=epochs, batch_size=X_train.shape[0], verbose=1)
+        estimator = KerasRegressor(build_fn=MLP_B2(NumberofCompanies), epochs=epochs, batch_size=X_train.shape[0], verbose=1)
 
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
 
         # Enter checkpoint filename here
         checkpointer = ModelCheckpoint(filepath='saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' + str(
-            self.PredictionTimepoints) + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day)'.hdf5',
+            self.PredictionTimepoints) + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5',
                                        verbose=1, save_best_only=True)
 
         estimator.fit(X_train, y_train, validation_data=(X_valid, y_valid), callbacks=[checkpointer])
+    def output(self):
+        return None
 
-   
 if __name__ == '__main__':
                     ###############################
                     # OPTIONAL for Slackbot => sends notification to slack
