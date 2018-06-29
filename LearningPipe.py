@@ -177,31 +177,44 @@ class PrepareDataForANN(luigi.Task):
         self.X_valid = np.copy(DataCollection[TrainingSamples - 1:, :])
         self.y_valid = np.copy(TargetCollection[TrainingSamples - 1:, :])
 
+
         print("#############################")
         print("Trainingsamples: {}".format(self.X_train.shape))
         print("#############################")
 
-        #with self.output()["X_train"].open('w') as outfile:
-        np.save("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.X_train)
-        #with self.output()["y_train"].open('w') as outfile:
-        np.save("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.y_train)
-        #with self.output()["X_valid"].open('w') as outfile:
-        np.save("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.X_valid)
-        #with self.output()["y_valid"].open('w') as outfile:
-        np.save("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day), self.y_valid)
+
+
+        import pickle
+        with open(self.output()["X_train"].path, 'wb') as save_file:
+            pickle.dump(self.X_train, save_file, -1)
+        with open(self.output()["y_train"].path, 'wb') as save_file:
+            pickle.dump(self.y_train, save_file, -1)
+        with open(self.output()["X_valid"].path, 'wb') as save_file:
+            pickle.dump(self.X_valid, save_file, -1)
+        with open(self.output()["y_valid"].path, 'wb') as save_file:
+            pickle.dump(self.y_valid, save_file, -1)
+
 
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
-        return {"X_train": luigi.LocalTarget("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
-                "y_train": luigi.LocalTarget("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
-                "X_valid": luigi.LocalTarget("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
-                "y_valid": luigi.LocalTarget("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day)),
-                "RawData": self.input()["RawData"],
-                "NoNaNs": self.input()["NoNaNs"]
+        return {
+                 "X_train": luigi.LocalTarget("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "y_train": luigi.LocalTarget("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "X_valid": luigi.LocalTarget("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "y_valid": luigi.LocalTarget("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "RawData": self.input()["RawData"],
+                 "NoNaNs": self.input()["NoNaNs"]
                 }
 
-class LearnModel(luigi.Task):
+class LearnModel(luigi.WrapperTask):
+    PredictionTimepoints = luigi.Parameter()
+
+    def requires(self):
+        return PrepareDataForANN(self.PredictionTimepoints)
+
+
+class LearnModel2(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
     def MLP_B2(self, NumberofCompanies):
@@ -225,11 +238,11 @@ class LearnModel(luigi.Task):
 
     def run(self):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
-        # Load required (prepared) data
-        X_train = np.load(self.input()["X_train"].path)
-        y_train = np.load(self.input()["y_train"].path)
-        X_valid = np.load(self.input()["X_valid"].path)
-        y_valid = np.load(self.input()["y_valid"].path)
+        Load required (prepared) data
+        X_train = pickle.load(self.input()["X_train"].path)
+        y_train = pickle.load(self.input()["y_train"].path)
+        X_valid = pickle.load(self.input()["X_valid"].path)
+        y_valid = pickle.load(self.input()["y_valid"].path)
 
         print(X_train[:5])
         NumberofCompanies = self.X_train.shape[1]
