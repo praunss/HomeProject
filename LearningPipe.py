@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 from numpy import newaxis
 import datetime
-
+import pickle
 import time
 
 from sklearn.preprocessing import MinMaxScaler
@@ -182,17 +182,14 @@ class PrepareDataForANN(luigi.Task):
         print("Trainingsamples: {}".format(self.X_train.shape))
         print("#############################")
 
-
-
-        import pickle
         with open(self.output()["X_train"].path, 'wb') as save_file:
-            pickle.dump(self.X_train, save_file, -1)
+            pickle.dump(self.X_train, save_file)
         with open(self.output()["y_train"].path, 'wb') as save_file:
-            pickle.dump(self.y_train, save_file, -1)
+            pickle.dump(self.y_train, save_file)
         with open(self.output()["X_valid"].path, 'wb') as save_file:
-            pickle.dump(self.X_valid, save_file, -1)
+            pickle.dump(self.X_valid, save_file)
         with open(self.output()["y_valid"].path, 'wb') as save_file:
-            pickle.dump(self.y_valid, save_file, -1)
+            pickle.dump(self.y_valid, save_file)
 
 
     def output(self):
@@ -217,9 +214,9 @@ class LearnModel(luigi.WrapperTask):
 class LearnModel2(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
-    def MLP_B2(self, NumberofCompanies):
+    def MLP_B2(self):
         model = Sequential()
-        model.add(Flatten(input_shape=(self.PredictionTimepoints, NumberofCompanies)))
+        model.add(Flatten(input_shape=(int(self.PredictionTimepoints), self.NumberofCompanies)))
 
         # model.add(Dense(5000, activation='relu'))
         model.add(Dense(2000, activation='relu'))
@@ -237,33 +234,37 @@ class LearnModel2(luigi.Task):
         return PrepareDataForANN(self.PredictionTimepoints)
 
     def run(self):
-        self.PredictionTimepoints = int(self.PredictionTimepoints)
-        Load required (prepared) data
-        X_train = pickle.load(self.input()["X_train"].path)
-        y_train = pickle.load(self.input()["y_train"].path)
-        X_valid = pickle.load(self.input()["X_valid"].path)
-        y_valid = pickle.load(self.input()["y_valid"].path)
 
-        print(X_train[:5])
-        NumberofCompanies = self.X_train.shape[1]
-        epochs = 2000
+        # Load required (prepared) data
+        pickle_in = open(self.input()["X_train"].path, "rb")
+        self.X_train = pickle.load(pickle_in)
+        pickle_in = open(self.input()["y_train"].path, "rb")
+        self.y_train = pickle.load(pickle_in)
+        pickle_in = open(self.input()["X_valid"].path, "rb")
+        self.X_valid = pickle.load(pickle_in)
+        pickle_in = open(self.input()["y_valid"].path, "rb")
+        self.y_valid = pickle.load(pickle_in)
+
+        print(type(self.X_train))
+        self.NumberofCompanies = self.X_train.shape[2]
+        epochs = 5
 
         # fix random seed for reproducibility
         seed = 7
         np.random.seed(seed)
 
         # build estimator
-        estimator = KerasRegressor(build_fn=MLP_B2(NumberofCompanies), epochs=epochs, batch_size=X_train.shape[0], verbose=1)
+        estimator = KerasRegressor(build_fn=self.MLP_B2, epochs=epochs, batch_size=self.X_train.shape[0], verbose=1)
 
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
 
         # Enter checkpoint filename here
-        checkpointer = ModelCheckpoint(filepath='saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' + str(
-            self.PredictionTimepoints) + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5',
+        checkpointer = ModelCheckpoint(filepath='saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
+            self.PredictionTimepoints + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5',
                                        verbose=1, save_best_only=True)
 
-        estimator.fit(X_train, y_train, validation_data=(X_valid, y_valid), callbacks=[checkpointer])
+        estimator.fit(self.X_train, self.y_train, validation_data=(self.X_valid, self.y_valid), callbacks=[checkpointer])
     def output(self):
         return None
 
