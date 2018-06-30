@@ -1,11 +1,12 @@
 import luigi
-
+from luigi_slack import SlackBot, notify
 import pandas as pd
 import numpy as np
 from numpy import newaxis
 import datetime
 import pickle
 import time
+import os
 
 from sklearn.preprocessing import MinMaxScaler
 from keras.layers import Dropout, Flatten, Dense
@@ -15,7 +16,7 @@ from keras.wrappers.scikit_learn import KerasRegressor
 from keras.callbacks import ModelCheckpoint
 import quandl
 
-# Run with : python LearningPipe.py --scheduler-host localhost LearnModel --PredictionTimepoints 2
+# Run with : python LearningPipe.py --scheduler-host localhost StartLearningPipe --PredictionTimepoints 2 --Epochs 2000
 #####################
 # NOTE FH : TO FIX:
 #######################
@@ -54,7 +55,7 @@ class GetData(luigi.Task):
             RequestDate += str(0)
         RequestDate += str(self.now.day)
         print("Getting quandl data...")
-        self.mydata = quandl.get(companies, start_date="2018-01-01", end_date=RequestDate)
+        self.mydata = quandl.get(companies, start_date="2012-01-01", end_date=RequestDate)
         tickerend = time.time()
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
@@ -85,8 +86,6 @@ class CheckInputforNans(luigi.Task):
         # If fewer Nans, fill with bfill method
         self.mydata = self.mydata.fillna(method="bfill")
 
-        print("No Companies after bfill: {}".format(self.mydata.shape[1]))
-
         NumberofRowNansAC = len(self.mydata[self.mydata.isnull().any(axis=1)])
         if NumberofRowNansAC > 0:
             raise ValueError("Nans in data, cannot be filled artificially")
@@ -111,14 +110,11 @@ class PrepareDataForANN(luigi.Task):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
         self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
-        print("No Companies start Prepare: {}".format(self.mydata.shape[1]))
         self.mydata[['Date']] = self.mydata[['Date']].apply(pd.to_datetime, errors='ignore')
         self.mydata = self.mydata.set_index(self.mydata["Date"])
         self.mydata = self.mydata.drop("Date", axis=1)
 
         NumberofCompanies = self.mydata.shape[1]
-
-        print("No Companies after drop: {}".format(self.mydata.shape[1]))
 
         FirstIndex = self.PredictionTimepoints
         MaxPoints = self.mydata.shape[0] - FirstIndex
@@ -215,6 +211,7 @@ class PrepareDataForANN(luigi.Task):
 
 class LearnModel(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    Epochs = luigi.Parameter()
 
     def MLP_B2(self):
         model = Sequential()
@@ -247,9 +244,8 @@ class LearnModel(luigi.Task):
         pickle_in = open(self.input()["y_valid"].path, "rb")
         self.y_valid = pickle.load(pickle_in)
 
-        print(type(self.X_train))
         self.NumberofCompanies = self.X_train.shape[2]
-        epochs = 5
+        epochs = int(self.Epochs)
 
         # fix random seed for reproducibility
         seed = 7
@@ -268,22 +264,27 @@ class LearnModel(luigi.Task):
 
         estimator.fit(self.X_train, self.y_train, validation_data=(self.X_valid, self.y_valid), callbacks=[checkpointer])
     def output(self):
+        Delta = datetime.timedelta(days=1)
+        self.now = datetime.datetime.now() - Delta
         return {
         "X_train": self.input()["X_train"],
         "y_train": self.input()["y_train"],
         "X_valid": self.input()["X_valid"],
         "y_valid": self.input()["y_valid"],
         "RawData": self.input()["RawData"],
-        "NoNaNs": self.input()["NoNaNs"]
+        "NoNaNs": self.input()["NoNaNs"],
+        "Model": luigi.LocalTarget('saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
+            self.PredictionTimepoints + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5')
     }
 
 ###############################################
 # This Task removes temporary and input files
 class CleanUp(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    Epochs = luigi.Parameter()
 
     def requires(self):
-        return LearnModel(self.Pre)
+        return LearnModel(self.PredictionTimepoints, self.Epochs)
 
     def run(self):
 
@@ -296,20 +297,23 @@ class CleanUp(luigi.Task):
 
 
     def output(self):
-        return {"RawData": self.input()["RawData"]}
+        return {"Model": self.input()["Model"]}
 
 class StartLearningPipe(luigi.WrapperTask):
     PredictionTimepoints = luigi.Parameter()
+    Epochs = luigi.Parameter()
 
     def requires(self):
-        return CleanUp(self.PredictionTimepoints)
+        return CleanUp(self.PredictionTimepoints, self.Epochs)
 
 
 if __name__ == '__main__':
-                    ###############################
-                    # OPTIONAL for Slackbot => sends notification to slack
-                    # slacker = SlackBot(token='xoxp-379158436963-378561401968-379040477684-de68e92cda6785ba0b27bb8d9e1c66d5',
-                    #                    channels=['anomaly-pipe', '@Fabian Hecht'], events = ["SUCCESS", "FAILURE"])
-                    # with notify(slacker):
-                    #     luigi.run()
-    luigi.run()
+    ##############################
+   # OPTIONAL for Slackbot => sends notification to slack
+    with open("Meta/slacktoken.txt", "r") as myfile:
+        token = myfile.readlines()
+    slacker = SlackBot(token=token,
+                       channels=['pipenews', '@FM Hecht'], events = ["SUCCESS", "FAILURE"])
+    with notify(slacker):
+        luigi.run()
+   # luigi.run()
