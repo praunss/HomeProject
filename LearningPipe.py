@@ -57,6 +57,7 @@ class GetData(luigi.Task):
         self.mydata = quandl.get(companies, start_date="2018-01-01", end_date=RequestDate)
         tickerend = time.time()
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
+        print("No Companies: {}".format(self.mydata.shape[1]))
 
         # save as csv with current date
         with self.output().open('w') as outfile:
@@ -83,6 +84,9 @@ class CheckInputforNans(luigi.Task):
             raise ValueError("More than 5 NaNs in downloaded data")
         # If fewer Nans, fill with bfill method
         self.mydata = self.mydata.fillna(method="bfill")
+
+        print("No Companies after bfill: {}".format(self.mydata.shape[1]))
+
         NumberofRowNansAC = len(self.mydata[self.mydata.isnull().any(axis=1)])
         if NumberofRowNansAC > 0:
             raise ValueError("Nans in data, cannot be filled artificially")
@@ -93,7 +97,7 @@ class CheckInputforNans(luigi.Task):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
 
-        return {"NoNaNs": luigi.LocalTarget("Data/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
+        return {"NoNaNs": luigi.LocalTarget("Temp/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
                 "RawData" : self.input() }
 
 
@@ -106,12 +110,15 @@ class PrepareDataForANN(luigi.Task):
     def run(self):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
-        self.mydata = pd.read_csv(self.input()["NoNaNs"].path)
+        self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
+        print("No Companies start Prepare: {}".format(self.mydata.shape[1]))
         self.mydata[['Date']] = self.mydata[['Date']].apply(pd.to_datetime, errors='ignore')
         self.mydata = self.mydata.set_index(self.mydata["Date"])
         self.mydata = self.mydata.drop("Date", axis=1)
 
         NumberofCompanies = self.mydata.shape[1]
+
+        print("No Companies after drop: {}".format(self.mydata.shape[1]))
 
         FirstIndex = self.PredictionTimepoints
         MaxPoints = self.mydata.shape[0] - FirstIndex
@@ -171,7 +178,7 @@ class PrepareDataForANN(luigi.Task):
 
         # Define number of Training samples (85 %), Validation (15%)
         TrainingSamples = int(MaxPoints * 0.85)
-        ValidationSamples = int(MaxPoints - TrainingSamples)
+
         self.X_train = np.copy(DataCollection[:TrainingSamples, :])
         self.y_train = np.copy(TargetCollection[:TrainingSamples, :])
         self.X_valid = np.copy(DataCollection[TrainingSamples - 1:, :])
@@ -204,14 +211,9 @@ class PrepareDataForANN(luigi.Task):
                  "NoNaNs": self.input()["NoNaNs"]
                 }
 
-class LearnModel(luigi.WrapperTask):
-    PredictionTimepoints = luigi.Parameter()
-
-    def requires(self):
-        return PrepareDataForANN(self.PredictionTimepoints)
 
 
-class LearnModel2(luigi.Task):
+class LearnModel(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
     def MLP_B2(self):
@@ -266,7 +268,42 @@ class LearnModel2(luigi.Task):
 
         estimator.fit(self.X_train, self.y_train, validation_data=(self.X_valid, self.y_valid), callbacks=[checkpointer])
     def output(self):
-        return None
+        return {
+        "X_train": self.input()["X_train"],
+        "y_train": self.input()["y_train"],
+        "X_valid": self.input()["X_valid"],
+        "y_valid": self.input()["y_valid"],
+        "RawData": self.input()["RawData"],
+        "NoNaNs": self.input()["NoNaNs"]
+    }
+
+###############################################
+# This Task removes temporary and input files
+class CleanUp(luigi.Task):
+    PredictionTimepoints = luigi.Parameter()
+
+    def requires(self):
+        return LearnModel(self.Pre)
+
+    def run(self):
+
+        # Delete Files from input folder
+        os.remove(self.input()["X_train"].path)
+        os.remove(self.input()["y_train"].path)
+        os.remove(self.input()["X_valid"].path)
+        os.remove(self.input()["y_valid"].path)
+        os.remove(self.input()["NoNaNs"].path)
+
+
+    def output(self):
+        return {"RawData": self.input()["RawData"]}
+
+class StartLearningPipe(luigi.WrapperTask):
+    PredictionTimepoints = luigi.Parameter()
+
+    def requires(self):
+        return CleanUp(self.PredictionTimepoints)
+
 
 if __name__ == '__main__':
                     ###############################
