@@ -7,13 +7,11 @@ import datetime
 import pickle
 import time
 import os
+import glob
 
 from sklearn.preprocessing import MinMaxScaler
 from keras.layers import Dropout, Flatten, Dense
 from keras.models import Sequential
-from keras.models import Model
-from keras.wrappers.scikit_learn import KerasRegressor
-from keras.callbacks import ModelCheckpoint
 import quandl
 
 # Run with : python ScoringPipe.py --scheduler-host localhost StartScoringPipe --PredictionTimepoints 2
@@ -48,8 +46,8 @@ class GetData(luigi.Task):
 
         # Generate todays date autmatically
         Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now()-Delta
-        PredictionDelta = datetime.timedelta(days=int(self.PredictionTimepoints))
+        self.now = datetime.datetime.now()#-Delta
+        PredictionDelta = datetime.timedelta(days=int(self.PredictionTimepoints)+5)
         self.past = datetime.datetime.now()-PredictionDelta
 
         RequestDate = str(self.now.year) + "-"
@@ -59,7 +57,7 @@ class GetData(luigi.Task):
         if int(self.now.day) < 10:
             RequestDate += str(0)
         RequestDate += str(self.now.day)
-
+        print("RequestDate {}".format(RequestDate))
         RequestDateStart = str(self.past.year) + "-"
         if int(self.past.month) < 10:
             RequestDateStart += str(0)
@@ -67,13 +65,15 @@ class GetData(luigi.Task):
         if int(self.past.day) < 10:
             RequestDateStart += str(0)
         RequestDateStart += str(self.past.day)
+        print("RequestDatestart {}".format(RequestDateStart))
 
         print("Getting quandl data...")
         self.mydata = quandl.get(companies, start_date=RequestDateStart, end_date=RequestDate)
         tickerend = time.time()
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
-        print("Timepoints: {}".format(self.mydata.shape[0]))
+
+        print(self.mydata.head())
 
         # save as csv with current date
         with self.output().open('w') as outfile:
@@ -152,79 +152,45 @@ class PrepareDataForANN(luigi.Task):
             mydataNormalizedNP = scaler.fit_transform(mydataNP)
             mydataPP = pd.DataFrame(mydataNormalizedNP)
 
-        # FIRST define target day, THEN extract image of past data
 
-        for i in range(MaxPoints):
-            # START CREATE OUTPUT VECTORS
+        # START CREATE INPUT VECTORS (IMAGES)
 
-            PredictTemp = mydataPP.iloc[toPredictIndex]
+        AdjCloseTemp = mydataPP.iloc[0 : self.PredictionTimepoints]  # e.g. 0 - 249 inclusive, as last index is not sliced
 
-            arrayPredtemp = np.array(PredictTemp, np.float32)[newaxis, :]
-            TargetCollection = np.append(TargetCollection, arrayPredtemp, axis=0)
+        AdjCloseTemp_Array = AdjCloseTemp.values
 
-            # START CREATE INPUT VECTORS (IMAGES)
-            end = toPredictIndex  # e.g. first = 250
-            start = end - self.PredictionTimepoints  # e.g. first = 0
+        arrayAdjClosedTemp = np.array(AdjCloseTemp_Array, np.float32)[newaxis, :, :]
+        DataCollection = np.append(DataCollection, arrayAdjClosedTemp, axis=0)
 
-            AdjCloseTemp = mydataPP.iloc[start: end]  # e.g. 0 - 249 inclusive, as last index is not sliced
-
-            AdjCloseTemp_Array = AdjCloseTemp.values
-
-            arrayAdjClosedTemp = np.array(AdjCloseTemp_Array, np.float32)[newaxis, :, :]
-            DataCollection = np.append(DataCollection, arrayAdjClosedTemp, axis=0)
-
-            # END CREATE IMAGES
-
-            toPredictIndex += 1
-
+        # END CREATE IMAGES
         DataCollection = DataCollection[1:DataCollection.shape[0], :, :]
-        TargetCollection = TargetCollection[1:TargetCollection.shape[0], :]
 
         print("#############################")
         print("Data Shape prepared for ANN:")
         print(DataCollection.shape)
         print("#############################")
 
-        # Define number of Training samples (85 %), Validation (15%)
-        TrainingSamples = int(MaxPoints * 0.85)
-
-        self.X_train = np.copy(DataCollection[:TrainingSamples, :])
-        self.y_train = np.copy(TargetCollection[:TrainingSamples, :])
-        self.X_valid = np.copy(DataCollection[TrainingSamples - 1:, :])
-        self.y_valid = np.copy(TargetCollection[TrainingSamples - 1:, :])
-
-
         print("#############################")
-        print("Trainingsamples: {}".format(self.X_train.shape))
+        print("Scoring Samples: {}".format(self.X_train.shape))
         print("#############################")
 
-        with open(self.output()["X_train"].path, 'wb') as save_file:
+        with open(self.output()["X_score"].path, 'wb') as save_file:
             pickle.dump(self.X_train, save_file)
-        with open(self.output()["y_train"].path, 'wb') as save_file:
-            pickle.dump(self.y_train, save_file)
-        with open(self.output()["X_valid"].path, 'wb') as save_file:
-            pickle.dump(self.X_valid, save_file)
-        with open(self.output()["y_valid"].path, 'wb') as save_file:
-            pickle.dump(self.y_valid, save_file)
 
 
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
         return {
-                 "X_train": luigi.LocalTarget("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "y_train": luigi.LocalTarget("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "X_valid": luigi.LocalTarget("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "y_valid": luigi.LocalTarget("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "X_score": luigi.LocalTarget("Temp/X_score-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
                  "RawData": self.input()["RawData"],
                  "NoNaNs": self.input()["NoNaNs"]
                 }
 
 
 
-class LearnModel(luigi.Task):
+class ScoreModel(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
-    Epochs = luigi.Parameter()
 
     def MLP_B2(self):
         model = Sequential()
@@ -246,78 +212,58 @@ class LearnModel(luigi.Task):
         return PrepareDataForANN(self.PredictionTimepoints)
 
     def run(self):
-
         # Load required (prepared) data
-        pickle_in = open(self.input()["X_train"].path, "rb")
-        self.X_train = pickle.load(pickle_in)
-        pickle_in = open(self.input()["y_train"].path, "rb")
-        self.y_train = pickle.load(pickle_in)
-        pickle_in = open(self.input()["X_valid"].path, "rb")
-        self.X_valid = pickle.load(pickle_in)
-        pickle_in = open(self.input()["y_valid"].path, "rb")
-        self.y_valid = pickle.load(pickle_in)
-
+        pickle_in = open(self.input()["X_score"].path, "rb")
+        self.X_score = pickle.load(pickle_in)
         self.NumberofCompanies = self.X_train.shape[2]
-        epochs = int(self.Epochs)
 
-        # fix random seed for reproducibility
-        seed = 7
-        np.random.seed(seed)
+        # Check for newest model
+        Models = glob.glob("saved_models_pipe/*MLPtype2_B2*.hdf5")
+        RecentModel = Models[-1]
 
-        # build estimator
-        estimator = KerasRegressor(build_fn=self.MLP_B2, epochs=epochs, batch_size=self.X_train.shape[0], verbose=1)
+        model = self.MLP_B2()
+        model.load_weights(RecentModel)
 
-        Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now() - Delta
+        self.y_pred = model.predict(self.X_score)
 
-        # Enter checkpoint filename here
-        checkpointer = ModelCheckpoint(filepath='saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
-            self.PredictionTimepoints + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5',
-                                       verbose=1, save_best_only=True)
+        print(y_pred)
 
-        estimator.fit(self.X_train, self.y_train, validation_data=(self.X_valid, self.y_valid), callbacks=[checkpointer])
+        with open(self.output()["y_pred"].path, 'wb') as save_file:
+            pickle.dump(self.y_pred, save_file)
+
     def output(self):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
         return {
-        "X_train": self.input()["X_train"],
-        "y_train": self.input()["y_train"],
-        "X_valid": self.input()["X_valid"],
-        "y_valid": self.input()["y_valid"],
+        "X_score": self.input()["X_score"],
         "RawData": self.input()["RawData"],
         "NoNaNs": self.input()["NoNaNs"],
-        "Model": luigi.LocalTarget('saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
-            self.PredictionTimepoints + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5')
+        "y_pred": luigi.LocalTarget('Predictions/y_pred' +
+             "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.pickle')
     }
 
 ###############################################
 # This Task removes temporary and input files
 class CleanUp(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
-    Epochs = luigi.Parameter()
 
     def requires(self):
-        return LearnModel(self.PredictionTimepoints, self.Epochs)
+        return ScoreModel(self.PredictionTimepoints)
 
     def run(self):
 
         # Delete Files from input folder
-        os.remove(self.input()["X_train"].path)
-        os.remove(self.input()["y_train"].path)
-        os.remove(self.input()["X_valid"].path)
-        os.remove(self.input()["y_valid"].path)
+        os.remove(self.input()["X_score"].path)
         os.remove(self.input()["NoNaNs"].path)
 
-
     def output(self):
-        return {"Model": self.input()["Model"]}
+        return {"y_pred": self.input()["y_pred"]}
 
-class StartLearningPipe(luigi.WrapperTask):
+class StartScoringPipe(luigi.WrapperTask):
     PredictionTimepoints = luigi.Parameter()
-    Epochs = luigi.Parameter()
 
     def requires(self):
-        return CleanUp(self.PredictionTimepoints, self.Epochs)
+        return CleanUp(self.PredictionTimepoints)
 
 
 if __name__ == '__main__':
