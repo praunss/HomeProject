@@ -146,9 +146,10 @@ class PrepareDataForANN(luigi.Task):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
         self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
-        self.mydata[['date']] = self.mydata[['date']].apply(pd.to_datetime, errors='ignore')
-        self.mydata = self.mydata.set_index(self.mydata["date"])
-        self.mydata = self.mydata.drop("date", axis=1)
+        print(self.mydata.head())
+        #self.mydata[['date']] = self.mydata[['date']].apply(pd.to_datetime, errors='ignore')
+        #self.mydata = self.mydata.set_index(self.mydata["date"])
+        #self.mydata = self.mydata.drop("date", axis=1)
 
         NumberofCompanies = self.mydata.shape[1]
 
