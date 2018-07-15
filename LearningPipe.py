@@ -15,6 +15,7 @@ from keras.models import Model
 from keras.wrappers.scikit_learn import KerasRegressor
 from keras.callbacks import ModelCheckpoint
 import quandl
+from alpha_vantage.timeseries import TimeSeries
 
 # Run with : python LearningPipe.py --scheduler-host localhost StartLearningPipe --PredictionTimepoints 2 --Epochs 2000
 #####################
@@ -41,6 +42,15 @@ class GetData(luigi.Task):
                      "WIKI/SYMC.11", "WIKI/TSLA.11", "WIKI/TXN.11", "WIKI/TSCO.11", "WIKI/TMUS.11", "WIKI/FOX.11",
                      "WIKI/ULTA.11", "WIKI/VRSK.11", "WIKI/VRTX.11", "WIKI/VIAB.11", "WIKI/VOD.11", "WIKI/WBA.11",
                      "WIKI/WDC.11", "WIKI/WYNN.11", "WIKI/XLNX.11"]  # "WIKI/PCLN.11",
+
+        companiesAlpha = ["ADBE", "AKAM", "ALXN", "GOOGL", "AMZN", "AAL", "AMGN", "ADI", "AAPL", "AMAT", "ADSK", "ADP",
+                          "BIDU", "BIIB", "BMRN", "CA", "CELG", "CERN", "CHKP", "CTAS", "CSCO", "CTXS", "CTSH", "CMCSA",
+                          "COST", "CSX", "XRAY", "DISCA", "DISH", "DLTR", "EBAY", "EA", "EXPE", "ESRX", "FAST", "FISV",
+                          "GILD", "HAS", "HSIC", "HOLX", "IDXX", "ILMN", "INCY", "INTC", "INTU", "ISRG", "JBHT", "KLAC",
+                          "LRCX", "LBTYA", "MAR", "MAT", "MXIM", "MCHP", "MU", "MDLZ", "MSFT", "MNST", "MYL", "NFLX",
+                          "NVDA", "ORLY", "PCAR", "PAYX", "QCOM", "REGN", "ROST", "STX", "SIRI", "SWKS", "SBUX", "SYMC",
+                          "TSLA", "TXN", "TSCO", "TMUS", "FOX", "ULTA", "VRSK", "VRTX", "VIAB", "VOD", "WBA", "WDC",
+                          "WYNN", "XLNX"]  # "PCLN",
         # Download via API
         tickerstart = time.time()
 
@@ -54,8 +64,15 @@ class GetData(luigi.Task):
         if int(self.now.day) < 10:
             RequestDate += str(0)
         RequestDate += str(self.now.day)
-        print("Getting quandl data...")
-        self.mydata = quandl.get(companies, start_date="2012-01-01", end_date=RequestDate)
+        #print("Getting quandl data...")
+        #self.mydata = quandl.get(companies, start_date="2012-01-01", end_date=RequestDate)
+        print("Getting alphavantage data...")
+
+        with open("Meta/alphavantage.txt", "r") as myfile:
+            alphatoken = myfile.readlines()
+        ts = TimeSeries(key=alphatoken, output_format='pandas', retries=5)
+        self.mydata = self.getalphadata(companiesAlpha, ts)
+
         tickerend = time.time()
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
@@ -63,6 +80,23 @@ class GetData(luigi.Task):
         # save as csv with current date
         with self.output().open('w') as outfile:
                 self.mydata.to_csv(outfile)
+
+    def getalphadata(self, companiesAlpha, ts):
+        finaldatacomp, metadata = ts.get_daily_adjusted(symbol='ATVI')
+        finaldata = pd.DataFrame(finaldatacomp["5. adjusted close"])
+        finaldata.columns = ["ATVI"]
+        i = 0
+        for company in companiesAlpha:
+            i += 1
+            data, metadata = ts.get_daily_adjusted(symbol=company)
+            datatemp = pd.DataFrame(data["5. adjusted close"])
+            datatemp.columns = [company]
+            finaldata = finaldata.join(datatemp)
+            if i == 4:
+                time.sleep(120)
+                i = 0
+        return finaldata
+
 
     def output(self):
         Delta = datetime.timedelta(days=1)
