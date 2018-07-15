@@ -82,13 +82,13 @@ class GetData(luigi.Task):
                 self.mydata.to_csv(outfile)
 
     def getalphadata(self, companiesAlpha, ts):
-        finaldatacomp, metadata = ts.get_daily_adjusted(symbol='ATVI')
+        finaldatacomp, metadata = ts.get_daily_adjusted(symbol='ATVI',outputsize="full")
         finaldata = pd.DataFrame(finaldatacomp["5. adjusted close"])
         finaldata.columns = ["ATVI"]
         i = 0
         for company in companiesAlpha:
             i += 1
-            data, metadata = ts.get_daily_adjusted(symbol=company)
+            data, metadata = ts.get_daily_adjusted(symbol=company,outputsize="full")
             datatemp = pd.DataFrame(data["5. adjusted close"])
             datatemp.columns = [company]
             finaldata = finaldata.join(datatemp)
@@ -111,7 +111,9 @@ class CheckInputforNans(luigi.Task):
 
     def run(self):
         # load from target
-        self.mydata = pd.read_csv(self.input().path)
+        self.mydata = pd.read_csv(self.input().path, parse_dates = True, index_col = "date")
+        # Optional: Slice data
+        self.mydata = self.mydata[datetime.datetime(2012, 1, 1):datetime.datetime(2017, 1, 1)]
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
@@ -144,9 +146,9 @@ class PrepareDataForANN(luigi.Task):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
         self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
-        self.mydata[['Date']] = self.mydata[['Date']].apply(pd.to_datetime, errors='ignore')
-        self.mydata = self.mydata.set_index(self.mydata["Date"])
-        self.mydata = self.mydata.drop("Date", axis=1)
+        self.mydata[['date']] = self.mydata[['date']].apply(pd.to_datetime, errors='ignore')
+        self.mydata = self.mydata.set_index(self.mydata["date"])
+        self.mydata = self.mydata.drop("date", axis=1)
 
         NumberofCompanies = self.mydata.shape[1]
 
