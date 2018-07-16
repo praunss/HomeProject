@@ -8,7 +8,7 @@ import pickle
 import time
 import os
 import glob
-
+from alpha_vantage.timeseries import TimeSeries
 from sklearn.preprocessing import MinMaxScaler
 from keras.layers import Dropout, Flatten, Dense
 from keras.models import Sequential
@@ -21,67 +21,59 @@ import quandl
 class GetData(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
+    def getalphadata(self, companiesAlpha, ts):
+        finaldatacomp, metadata = ts.get_daily_adjusted(symbol='ATVI',outputsize="compact")
+        finaldata = pd.DataFrame(finaldatacomp["5. adjusted close"])
+        finaldata.columns = ["ATVI"]
+        i = 0
+        for company in companiesAlpha:
+            i += 1
+            data, metadata = ts.get_daily_adjusted(symbol=company,outputsize="compact")
+            datatemp = pd.DataFrame(data["5. adjusted close"])
+            datatemp.columns = [company]
+            finaldata = finaldata.join(datatemp)
+            if i == 4:
+                time.sleep(120)
+                i = 0
+        return finaldata
+
     def requires(self):
         None
     def run(self):
 
-        quandl.ApiConfig.api_key = "U5cJSsnv4Ad7UUnHNGu8"
-        companies = ["WIKI/ATVI.11", "WIKI/ADBE.11", "WIKI/AKAM.11", "WIKI/ALXN.11", "WIKI/GOOGL.11", "WIKI/AMZN.11",
-                     "WIKI/AAL.11", "WIKI/AMGN.11", "WIKI/ADI.11", "WIKI/AAPL.11", "WIKI/AMAT.11", "WIKI/ADSK.11",
-                     "WIKI/ADP.11", "WIKI/BIDU.11", "WIKI/BIIB.11", "WIKI/BMRN.11", "WIKI/CA.11", "WIKI/CELG.11",
-                     "WIKI/CERN.11", "WIKI/CHKP.11", "WIKI/CTAS.11", "WIKI/CSCO.11", "WIKI/CTXS.11", "WIKI/CTSH.11",
-                     "WIKI/CMCSA.11", "WIKI/COST.11", "WIKI/CSX.11", "WIKI/XRAY.11", "WIKI/DISCA.11", "WIKI/DISH.11",
-                     "WIKI/DLTR.11", "WIKI/EBAY.11", "WIKI/EA.11", "WIKI/EXPE.11", "WIKI/ESRX.11", "WIKI/FAST.11",
-                     "WIKI/FISV.11", "WIKI/GILD.11", "WIKI/HAS.11", "WIKI/HSIC.11", "WIKI/HOLX.11", "WIKI/IDXX.11",
-                     "WIKI/ILMN.11", "WIKI/INCY.11", "WIKI/INTC.11", "WIKI/INTU.11", "WIKI/ISRG.11", "WIKI/JBHT.11",
-                     "WIKI/KLAC.11", "WIKI/LRCX.11", "WIKI/LBTYA.11", "WIKI/MAR.11", "WIKI/MAT.11", "WIKI/MXIM.11",
-                     "WIKI/MCHP.11", "WIKI/MU.11", "WIKI/MDLZ.11", "WIKI/MSFT.11", "WIKI/MNST.11", "WIKI/MYL.11",
-                     "WIKI/NFLX.11", "WIKI/NVDA.11", "WIKI/ORLY.11", "WIKI/PCAR.11", "WIKI/PAYX.11", "WIKI/QCOM.11",
-                     "WIKI/REGN.11", "WIKI/ROST.11", "WIKI/STX.11", "WIKI/SIRI.11", "WIKI/SWKS.11", "WIKI/SBUX.11",
-                     "WIKI/SYMC.11", "WIKI/TSLA.11", "WIKI/TXN.11", "WIKI/TSCO.11", "WIKI/TMUS.11", "WIKI/FOX.11",
-                     "WIKI/ULTA.11", "WIKI/VRSK.11", "WIKI/VRTX.11", "WIKI/VIAB.11", "WIKI/VOD.11", "WIKI/WBA.11",
-                     "WIKI/WDC.11", "WIKI/WYNN.11", "WIKI/XLNX.11"]  # "WIKI/PCLN.11",
+        companiesAlpha = ["ADBE", "AKAM", "ALXN", "GOOGL", "AMZN", "AAL", "AMGN", "ADI", "AAPL", "AMAT", "ADSK", "ADP",
+                          "BIDU", "BIIB", "BMRN", "CA", "CELG", "CERN", "CHKP", "CTAS", "CSCO", "CTXS", "CTSH", "CMCSA",
+                          "COST", "CSX", "XRAY", "DISCA", "DISH", "DLTR", "EBAY", "EA", "EXPE", "ESRX", "FAST", "FISV",
+                          "GILD", "HAS", "HSIC", "HOLX", "IDXX", "ILMN", "INCY", "INTC", "INTU", "ISRG", "JBHT", "KLAC",
+                          "LRCX", "LBTYA", "MAR", "MAT", "MXIM", "MCHP", "MU", "MDLZ", "MSFT", "MNST", "MYL", "NFLX",
+                          "NVDA", "ORLY", "PCAR", "PAYX", "QCOM", "REGN", "ROST", "STX", "SIRI", "SWKS", "SBUX", "SYMC",
+                          "TSLA", "TXN", "TSCO", "TMUS", "FOX", "ULTA", "VRSK", "VRTX", "VIAB", "VOD", "WBA", "WDC",
+                          "WYNN", "XLNX"]  # "PCLN",
         # Download via API
         tickerstart = time.time()
 
         # Generate todays date autmatically
-        Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now()#-Delta
-        PredictionDelta = datetime.timedelta(days=int(self.PredictionTimepoints)+5)
-        self.past = datetime.datetime.now()-PredictionDelta
+        self.now = datetime.datetime.now()
 
-        RequestDate = str(self.now.year) + "-"
-        if int(self.now.month) < 10:
-            RequestDate += str(0)
-        RequestDate += str(self.now.month) + "-"
-        if int(self.now.day) < 10:
-            RequestDate += str(0)
-        RequestDate += str(self.now.day)
-        print("RequestDate {}".format(RequestDate))
-        RequestDateStart = str(self.past.year) + "-"
-        if int(self.past.month) < 10:
-            RequestDateStart += str(0)
-        RequestDateStart += str(self.past.month) + "-"
-        if int(self.past.day) < 10:
-            RequestDateStart += str(0)
-        RequestDateStart += str(self.past.day)
-        print("RequestDatestart {}".format(RequestDateStart))
+        print("Getting alphavantage data...")
 
-        print("Getting quandl data...")
-        self.mydata = quandl.get(companies, start_date=RequestDateStart, end_date=RequestDate)
+        with open("Meta/alphavantage.txt", "r") as myfile:
+            alphatoken = myfile.readlines()
+        ts = TimeSeries(key=alphatoken, output_format='pandas', retries=5)
+        self.mydata = self.getalphadata(companiesAlpha, ts)
+
         tickerend = time.time()
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
 
-        print(self.mydata.head())
+
 
         # save as csv with current date
         with self.output().open('w') as outfile:
                 self.mydata.to_csv(outfile)
 
     def output(self):
-        Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now() - Delta
+        self.now = datetime.datetime.now()
 
         return luigi.LocalTarget("Data/ScoringData-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
 
@@ -93,27 +85,24 @@ class CheckInputforNans(luigi.Task):
         return GetData(self.PredictionTimepoints)
 
     def run(self):
+        self.now = datetime.datetime.now()
         # load from target
-        self.mydata = pd.read_csv(self.input().path)
+        self.mydata = pd.read_csv(self.input().path, parse_dates = True, index_col = "date")
+
+        # Slice data to get last n days (PredictionTimepoints)
+        Delta = datetime.timedelta(days=int(self.PredictionTimepoints))
+        self.mydata = self.mydata[self.now-Delta : self.now]
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
         if NumberofRowNans > 0:
             raise ValueError("NaNs detected in scoring data")
-        # If fewer Nans, fill with bfill method
 
-        with self.output()["NoNaNs"].open('w') as outfile:
-            self.mydata.to_csv(outfile)
 
     def output(self):
-        Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now() - Delta
+        return  self.input()
 
-        return {"NoNaNs": luigi.LocalTarget("Temp/ScoringData-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
-                "RawData" : self.input() }
-
-
-class PrepareDataForANN(luigi.Task):
+class PrepareDataForScoring(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
 
     def requires(self):
@@ -122,30 +111,24 @@ class PrepareDataForANN(luigi.Task):
     def run(self):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
-        self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
-        self.mydata[['Date']] = self.mydata[['Date']].apply(pd.to_datetime, errors='ignore')
-        self.mydata = self.mydata.set_index(self.mydata["Date"])
-        self.mydata = self.mydata.drop("Date", axis=1)
+        self.mydata = pd.read_csv(self.input().path, index_col=0, parse_dates=True)
 
         NumberofCompanies = self.mydata.shape[1]
 
         FirstIndex = self.PredictionTimepoints
         MaxPoints = self.mydata.shape[0] - FirstIndex
 
-        MLP = True  # False => CNN
+        MLP = True
         normalization = True
 
         # create np array for Data Collection
         DataCollection = np.empty([1, self.PredictionTimepoints, NumberofCompanies])
-        # Create np array for Target Collection
-        TargetCollection = np.empty([1, NumberofCompanies])
 
         # Create copy of data frame for handling
         mydataPP = self.mydata.copy(deep=True)
-        # Set StartIndex to FirstIndex
-        toPredictIndex = FirstIndex
 
         # Normalization if required
+        #TODO : Learning pipe must save normalization object to be applied here
         if (normalization == True):
             mydataNP = self.mydata.values
             scaler = MinMaxScaler()
@@ -166,25 +149,20 @@ class PrepareDataForANN(luigi.Task):
         DataCollection = DataCollection[1:DataCollection.shape[0], :, :]
 
         print("#############################")
-        print("Data Shape prepared for ANN:")
+        print("Scoring Data Shape prepared for ANN:")
         print(DataCollection.shape)
         print("#############################")
 
-        print("#############################")
-        print("Scoring Samples: {}".format(self.X_train.shape))
-        print("#############################")
 
         with open(self.output()["X_score"].path, 'wb') as save_file:
-            pickle.dump(self.X_train, save_file)
+            pickle.dump(DataCollection, save_file)
 
 
     def output(self):
-        Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now() - Delta
+        self.now = datetime.datetime.now()
         return {
-                 "X_score": luigi.LocalTarget("Temp/X_score-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "RawData": self.input()["RawData"],
-                 "NoNaNs": self.input()["NoNaNs"]
+                 "X_score": luigi.LocalTarget("Data/X_score-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "RawData": self.input()
                 }
 
 
@@ -209,13 +187,13 @@ class ScoreModel(luigi.Task):
         return model
 
     def requires(self):
-        return PrepareDataForANN(self.PredictionTimepoints)
+        return PrepareDataForScoring(self.PredictionTimepoints)
 
     def run(self):
         # Load required (prepared) data
         pickle_in = open(self.input()["X_score"].path, "rb")
         self.X_score = pickle.load(pickle_in)
-        self.NumberofCompanies = self.X_train.shape[2]
+        self.NumberofCompanies = self.X_score.shape[2]
 
         # Check for newest model
         Models = glob.glob("saved_models_pipe/*MLPtype2_B2*.hdf5")
@@ -226,18 +204,17 @@ class ScoreModel(luigi.Task):
 
         self.y_pred = model.predict(self.X_score)
 
-        print(y_pred)
+        #TODO: Find the max scoring company and post it to slack
+        print(self.y_pred)
 
         with open(self.output()["y_pred"].path, 'wb') as save_file:
             pickle.dump(self.y_pred, save_file)
 
     def output(self):
-        Delta = datetime.timedelta(days=1)
-        self.now = datetime.datetime.now() - Delta
+        self.now = datetime.datetime.now()
         return {
         "X_score": self.input()["X_score"],
         "RawData": self.input()["RawData"],
-        "NoNaNs": self.input()["NoNaNs"],
         "y_pred": luigi.LocalTarget('Predictions/y_pred' +
              "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.pickle')
     }
@@ -251,10 +228,10 @@ class CleanUp(luigi.Task):
         return ScoreModel(self.PredictionTimepoints)
 
     def run(self):
-
+        print("Nothing to clean")
         # Delete Files from input folder
-        os.remove(self.input()["X_score"].path)
-        os.remove(self.input()["NoNaNs"].path)
+        #os.remove(self.input()["X_score"].path)
+        #os.remove(self.input()["NoNaNs"].path)
 
     def output(self):
         return {"y_pred": self.input()["y_pred"]}

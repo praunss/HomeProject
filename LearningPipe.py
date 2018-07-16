@@ -26,23 +26,6 @@ class GetData(luigi.Task):
         None
     def run(self):
 
-        quandl.ApiConfig.api_key = "U5cJSsnv4Ad7UUnHNGu8"
-        companies = ["WIKI/ATVI.11", "WIKI/ADBE.11", "WIKI/AKAM.11", "WIKI/ALXN.11", "WIKI/GOOGL.11", "WIKI/AMZN.11",
-                     "WIKI/AAL.11", "WIKI/AMGN.11", "WIKI/ADI.11", "WIKI/AAPL.11", "WIKI/AMAT.11", "WIKI/ADSK.11",
-                     "WIKI/ADP.11", "WIKI/BIDU.11", "WIKI/BIIB.11", "WIKI/BMRN.11", "WIKI/CA.11", "WIKI/CELG.11",
-                     "WIKI/CERN.11", "WIKI/CHKP.11", "WIKI/CTAS.11", "WIKI/CSCO.11", "WIKI/CTXS.11", "WIKI/CTSH.11",
-                     "WIKI/CMCSA.11", "WIKI/COST.11", "WIKI/CSX.11", "WIKI/XRAY.11", "WIKI/DISCA.11", "WIKI/DISH.11",
-                     "WIKI/DLTR.11", "WIKI/EBAY.11", "WIKI/EA.11", "WIKI/EXPE.11", "WIKI/ESRX.11", "WIKI/FAST.11",
-                     "WIKI/FISV.11", "WIKI/GILD.11", "WIKI/HAS.11", "WIKI/HSIC.11", "WIKI/HOLX.11", "WIKI/IDXX.11",
-                     "WIKI/ILMN.11", "WIKI/INCY.11", "WIKI/INTC.11", "WIKI/INTU.11", "WIKI/ISRG.11", "WIKI/JBHT.11",
-                     "WIKI/KLAC.11", "WIKI/LRCX.11", "WIKI/LBTYA.11", "WIKI/MAR.11", "WIKI/MAT.11", "WIKI/MXIM.11",
-                     "WIKI/MCHP.11", "WIKI/MU.11", "WIKI/MDLZ.11", "WIKI/MSFT.11", "WIKI/MNST.11", "WIKI/MYL.11",
-                     "WIKI/NFLX.11", "WIKI/NVDA.11", "WIKI/ORLY.11", "WIKI/PCAR.11", "WIKI/PAYX.11", "WIKI/QCOM.11",
-                     "WIKI/REGN.11", "WIKI/ROST.11", "WIKI/STX.11", "WIKI/SIRI.11", "WIKI/SWKS.11", "WIKI/SBUX.11",
-                     "WIKI/SYMC.11", "WIKI/TSLA.11", "WIKI/TXN.11", "WIKI/TSCO.11", "WIKI/TMUS.11", "WIKI/FOX.11",
-                     "WIKI/ULTA.11", "WIKI/VRSK.11", "WIKI/VRTX.11", "WIKI/VIAB.11", "WIKI/VOD.11", "WIKI/WBA.11",
-                     "WIKI/WDC.11", "WIKI/WYNN.11", "WIKI/XLNX.11"]  # "WIKI/PCLN.11",
-
         companiesAlpha = ["ADBE", "AKAM", "ALXN", "GOOGL", "AMZN", "AAL", "AMGN", "ADI", "AAPL", "AMAT", "ADSK", "ADP",
                           "BIDU", "BIIB", "BMRN", "CA", "CELG", "CERN", "CHKP", "CTAS", "CSCO", "CTXS", "CTSH", "CMCSA",
                           "COST", "CSX", "XRAY", "DISCA", "DISH", "DLTR", "EBAY", "EA", "EXPE", "ESRX", "FAST", "FISV",
@@ -55,17 +38,8 @@ class GetData(luigi.Task):
         tickerstart = time.time()
 
         # Generate todays date autmatically
-        Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now()-Delta
-        RequestDate = str(self.now.year) + "-"
-        if int(self.now.month) < 10:
-            RequestDate += str(0)
-        RequestDate += str(self.now.month) + "-"
-        if int(self.now.day) < 10:
-            RequestDate += str(0)
-        RequestDate += str(self.now.day)
-        #print("Getting quandl data...")
-        #self.mydata = quandl.get(companies, start_date="2012-01-01", end_date=RequestDate)
+
         print("Getting alphavantage data...")
 
         with open("Meta/alphavantage.txt", "r") as myfile:
@@ -76,6 +50,9 @@ class GetData(luigi.Task):
         tickerend = time.time()
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
+
+        # Optional: Slice data
+        self.mydata = self.mydata[datetime.datetime(2012, 1, 1):self.now]
 
         # save as csv with current date
         with self.output().open('w') as outfile:
@@ -112,8 +89,7 @@ class CheckInputforNans(luigi.Task):
     def run(self):
         # load from target
         self.mydata = pd.read_csv(self.input().path, parse_dates = True, index_col = "date")
-        # Optional: Slice data
-        self.mydata = self.mydata[datetime.datetime(2012, 1, 1):datetime.datetime(2017, 1, 1)]
+
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
@@ -146,10 +122,6 @@ class PrepareDataForANN(luigi.Task):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
         self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
-        print(self.mydata.head())
-        #self.mydata[['date']] = self.mydata[['date']].apply(pd.to_datetime, errors='ignore')
-        #self.mydata = self.mydata.set_index(self.mydata["date"])
-        #self.mydata = self.mydata.drop("date", axis=1)
 
         NumberofCompanies = self.mydata.shape[1]
 
