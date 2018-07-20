@@ -7,7 +7,7 @@ import datetime
 import pickle
 import time
 import os
-
+from sklearn.externals import joblib
 from sklearn.preprocessing import MinMaxScaler
 from keras.layers import Dropout, Flatten, Dense
 from keras.models import Sequential
@@ -38,6 +38,7 @@ class GetData(luigi.Task):
         tickerstart = time.time()
 
         # Generate todays date autmatically
+        Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now()-Delta
 
         print("Getting alphavantage data...")
@@ -51,8 +52,7 @@ class GetData(luigi.Task):
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
 
-        # Optional: Slice data
-        self.mydata = self.mydata[datetime.datetime(2012, 1, 1):self.now]
+
 
         # save as csv with current date
         with self.output().open('w') as outfile:
@@ -63,14 +63,17 @@ class GetData(luigi.Task):
         finaldata = pd.DataFrame(finaldatacomp["5. adjusted close"])
         finaldata.columns = ["ATVI"]
         i = 0
+        n = 0
         for company in companiesAlpha:
             i += 1
+            n += 1
             data, metadata = ts.get_daily_adjusted(symbol=company,outputsize="full")
+            print(str(n))
             datatemp = pd.DataFrame(data["5. adjusted close"])
             datatemp.columns = [company]
             finaldata = finaldata.join(datatemp)
-            if i == 4:
-                time.sleep(120)
+            if i == 1:
+                time.sleep(30)
                 i = 0
         return finaldata
 
@@ -89,7 +92,9 @@ class CheckInputforNans(luigi.Task):
     def run(self):
         # load from target
         self.mydata = pd.read_csv(self.input().path, parse_dates = True, index_col = "date")
+        # Optional: Slice data
 
+        self.mydata = self.mydata[datetime.datetime(2012, 1, 1):self.now]
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
@@ -119,6 +124,9 @@ class PrepareDataForANN(luigi.Task):
         return CheckInputforNans()
 
     def run(self):
+        Delta = datetime.timedelta(days=1)
+        self.now = datetime.datetime.now() - Delta
+
         self.PredictionTimepoints = int(self.PredictionTimepoints)
         # Data preparation
         self.mydata = pd.read_csv(self.input()["NoNaNs"].path, index_col=0, parse_dates=True)
@@ -147,7 +155,7 @@ class PrepareDataForANN(luigi.Task):
             scaler = MinMaxScaler()
             mydataNormalizedNP = scaler.fit_transform(mydataNP)
             mydataPP = pd.DataFrame(mydataNormalizedNP)
-
+            joblib.dump(scaler, 'saved_models_pipe/Scaler_' +  str(self.now.year) + str(self.now.month) + str(self.now.day) + '.pkl')
         # FIRST define target day, THEN extract image of past data
 
         for i in range(MaxPoints):

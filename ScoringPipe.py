@@ -8,10 +8,12 @@ import pickle
 import time
 import os
 import glob
+from sklearn.externals import joblib
 from alpha_vantage.timeseries import TimeSeries
 from sklearn.preprocessing import MinMaxScaler
 from keras.layers import Dropout, Flatten, Dense
 from keras.models import Sequential
+from slackclient import SlackClient
 import quandl
 
 # Run with : python ScoringPipe.py --scheduler-host localhost StartScoringPipe --PredictionTimepoints 2
@@ -32,8 +34,8 @@ class GetData(luigi.Task):
             datatemp = pd.DataFrame(data["5. adjusted close"])
             datatemp.columns = [company]
             finaldata = finaldata.join(datatemp)
-            if i == 4:
-                time.sleep(120)
+            if i == 1:
+                time.sleep(30)
                 i = 0
         return finaldata
 
@@ -128,11 +130,12 @@ class PrepareDataForScoring(luigi.Task):
         mydataPP = self.mydata.copy(deep=True)
 
         # Normalization if required
-        #TODO : Learning pipe must save normalization object to be applied here
+        Scalers = glob.glob("saved_models_pipe/*Scaler*.pkl")
+        RecentScaler = Scalers[-1]
+        scaler = joblib.load(RecentScaler)
         if (normalization == True):
             mydataNP = self.mydata.values
-            scaler = MinMaxScaler()
-            mydataNormalizedNP = scaler.fit_transform(mydataNP)
+            mydataNormalizedNP = scaler.transform(mydataNP)
             mydataPP = pd.DataFrame(mydataNormalizedNP)
 
 
@@ -202,10 +205,32 @@ class ScoreModel(luigi.Task):
         model = self.MLP_B2()
         model.load_weights(RecentModel)
 
+        companiesAlpha = ["ADBE", "AKAM", "ALXN", "GOOGL", "AMZN", "AAL", "AMGN", "ADI", "AAPL", "AMAT", "ADSK", "ADP",
+                          "BIDU", "BIIB", "BMRN", "CA", "CELG", "CERN", "CHKP", "CTAS", "CSCO", "CTXS", "CTSH", "CMCSA",
+                          "COST", "CSX", "XRAY", "DISCA", "DISH", "DLTR", "EBAY", "EA", "EXPE", "ESRX", "FAST", "FISV",
+                          "GILD", "HAS", "HSIC", "HOLX", "IDXX", "ILMN", "INCY", "INTC", "INTU", "ISRG", "JBHT", "KLAC",
+                          "LRCX", "LBTYA", "MAR", "MAT", "MXIM", "MCHP", "MU", "MDLZ", "MSFT", "MNST", "MYL", "NFLX",
+                          "NVDA", "ORLY", "PCAR", "PAYX", "QCOM", "REGN", "ROST", "STX", "SIRI", "SWKS", "SBUX", "SYMC",
+                          "TSLA", "TXN", "TSCO", "TMUS", "FOX", "ULTA", "VRSK", "VRTX", "VIAB", "VOD", "WBA", "WDC",
+                          "WYNN", "XLNX"]  # "PCLN",
+
         self.y_pred = model.predict(self.X_score)
 
-        #TODO: Find the max scoring company and post it to slack
-        print(self.y_pred)
+        self.Delta = self.y_pred - self.X_score[0, 1, :]
+        index_max = np.argmax(self.Delta)
+        max_company = companiesAlpha[index_max]
+
+        tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
+        tomorrow = tomorrow.strftime("%y%m%d")
+        SlackMsg = "Prediction for " + tomorrow+": "+ max_company + " ("+ str(np.max(self.Delta)) + ")"
+        with open("Meta/slacktoken.txt", "r") as myfile:
+            token = myfile.readlines()
+        sc = SlackClient(token)
+        sc.api_call(
+            "chat.postMessage",
+            channel="predictions",
+            text=SlackMsg
+        )
 
         with open(self.output()["y_pred"].path, 'wb') as save_file:
             pickle.dump(self.y_pred, save_file)
