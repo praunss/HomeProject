@@ -14,6 +14,7 @@ from sklearn.preprocessing import MinMaxScaler
 from keras.layers import Dropout, Flatten, Dense
 from keras.models import Sequential
 from slackclient import SlackClient
+from pytz import timezone
 import quandl
 
 # Run with : python ScoringPipe.py --scheduler-host localhost StartScoringPipe --PredictionTimepoints 2
@@ -22,6 +23,7 @@ import quandl
 #######################
 class GetData(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    root = luigi.Parameter()
 
     def getalphadata(self, companiesAlpha, ts):
         finaldatacomp, metadata = ts.get_daily_adjusted(symbol='ATVI',outputsize="compact")
@@ -54,12 +56,9 @@ class GetData(luigi.Task):
         # Download via API
         tickerstart = time.time()
 
-        # Generate todays date autmatically
-        self.now = datetime.datetime.now()
-
         print("Getting alphavantage data...")
 
-        with open("Meta/alphavantage.txt", "r") as myfile:
+        with open(self.root+"/Meta/alphavantage.txt", "r") as myfile:
             alphatoken = myfile.readlines()
         ts = TimeSeries(key=alphatoken, output_format='pandas', retries=5)
         self.mydata = self.getalphadata(companiesAlpha, ts)
@@ -68,8 +67,6 @@ class GetData(luigi.Task):
         print("Data downloaded in {} s".format((tickerend - tickerstart)))
         print("No Companies: {}".format(self.mydata.shape[1]))
 
-
-
         # save as csv with current date
         with self.output().open('w') as outfile:
                 self.mydata.to_csv(outfile)
@@ -77,23 +74,29 @@ class GetData(luigi.Task):
     def output(self):
         self.now = datetime.datetime.now()
 
-        return luigi.LocalTarget("Data/ScoringData-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
+        return luigi.LocalTarget(self.root+"/Data/ScoringData-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
 
 
 class CheckInputforNans(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    root = luigi.Parameter()
 
     def requires(self):
-        return GetData(self.PredictionTimepoints)
+        return GetData(self.PredictionTimepoints,self.root)
 
     def run(self):
-        self.now = datetime.datetime.now()
+        #self.now = datetime.datetime.now()
+        # NASDAQ time
+        self.now = datetime.datetime.now(timezone("America/New_York"))
         # load from target
         self.mydata = pd.read_csv(self.input().path, parse_dates = True, index_col = "date")
 
         # Slice data to get last n days (PredictionTimepoints)
         Delta = datetime.timedelta(days=int(self.PredictionTimepoints))
         self.mydata = self.mydata[self.now-Delta : self.now]
+
+        if len(self.mydata)<1:
+            raise ValueError("No Data in last two days!")
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
@@ -106,9 +109,10 @@ class CheckInputforNans(luigi.Task):
 
 class PrepareDataForScoring(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    root = luigi.Parameter()
 
     def requires(self):
-        return CheckInputforNans(self.PredictionTimepoints)
+        return CheckInputforNans(self.PredictionTimepoints,self.root)
 
     def run(self):
         self.PredictionTimepoints = int(self.PredictionTimepoints)
@@ -130,7 +134,7 @@ class PrepareDataForScoring(luigi.Task):
         mydataPP = self.mydata.copy(deep=True)
 
         # Normalization if required
-        Scalers = glob.glob("saved_models_pipe/*Scaler*.pkl")
+        Scalers = glob.glob(self.root+"/saved_models_pipe/*Scaler*.pkl")
         RecentScaler = Scalers[-1]
         scaler = joblib.load(RecentScaler)
         if (normalization == True):
@@ -164,14 +168,14 @@ class PrepareDataForScoring(luigi.Task):
     def output(self):
         self.now = datetime.datetime.now()
         return {
-                 "X_score": luigi.LocalTarget("Data/X_score-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "X_score": luigi.LocalTarget(self.root + "/Data/X_score-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
                  "RawData": self.input()
                 }
 
 
-
 class ScoreModel(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    root = luigi.Parameter()
 
     def MLP_B2(self):
         model = Sequential()
@@ -190,7 +194,7 @@ class ScoreModel(luigi.Task):
         return model
 
     def requires(self):
-        return PrepareDataForScoring(self.PredictionTimepoints)
+        return PrepareDataForScoring(self.PredictionTimepoints,self.root)
 
     def run(self):
         # Load required (prepared) data
@@ -199,7 +203,7 @@ class ScoreModel(luigi.Task):
         self.NumberofCompanies = self.X_score.shape[2]
 
         # Check for newest model
-        Models = glob.glob("saved_models_pipe/*MLPtype2_B2*.hdf5")
+        Models = glob.glob(self.root+"/saved_models_pipe/*MLPtype2_B2*.hdf5")
         RecentModel = Models[-1]
 
         model = self.MLP_B2()
@@ -220,10 +224,12 @@ class ScoreModel(luigi.Task):
         index_max = np.argmax(self.Delta)
         max_company = companiesAlpha[index_max]
 
-        tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
+        self.now = datetime.datetime.now(timezone("America/New_York"))
+
+        tomorrow = self.now + datetime.timedelta(days=1)
         tomorrow = tomorrow.strftime("%y%m%d")
-        SlackMsg = "Prediction for " + tomorrow+": "+ max_company + " ("+ str(np.max(self.Delta)) + ")"
-        with open("Meta/slacktoken.txt", "r") as myfile:
+        SlackMsg = "Prediction for " + tomorrow+": "+ max_company + " (+"+ str(100*np.max(self.Delta)) + ")"
+        with open(self.root+"/Meta/slacktoken.txt", "r") as myfile:
             token = myfile.readlines()
         sc = SlackClient(token)
         sc.api_call(
@@ -240,7 +246,7 @@ class ScoreModel(luigi.Task):
         return {
         "X_score": self.input()["X_score"],
         "RawData": self.input()["RawData"],
-        "y_pred": luigi.LocalTarget('Predictions/y_pred' +
+        "y_pred": luigi.LocalTarget(self.root+'/Predictions/y_pred' +
              "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.pickle')
     }
 
@@ -248,9 +254,9 @@ class ScoreModel(luigi.Task):
 # This Task removes temporary and input files
 class CleanUp(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
-
+    root = luigi.Parameter()
     def requires(self):
-        return ScoreModel(self.PredictionTimepoints)
+        return ScoreModel(self.PredictionTimepoints,self.root)
 
     def run(self):
         print("Nothing to clean")
@@ -263,15 +269,15 @@ class CleanUp(luigi.Task):
 
 class StartScoringPipe(luigi.WrapperTask):
     PredictionTimepoints = luigi.Parameter()
-
+    root = "C:/Users/Fabian/Documents/FinancialForecasting"
     def requires(self):
-        return CleanUp(self.PredictionTimepoints)
+        return CleanUp(self.PredictionTimepoints,self.root)
 
 
 if __name__ == '__main__':
     ##############################
    # OPTIONAL for Slackbot => sends notification to slack
-    with open("Meta/slacktoken.txt", "r") as myfile:
+    with open("C:/Users/Fabian/Documents/FinancialForecasting/Meta/slacktoken.txt", "r") as myfile:
         token = myfile.readlines()
     slacker = SlackBot(token=token,
                        channels=['pipenews', '@FM Hecht'], events = ["SUCCESS", "FAILURE"])
