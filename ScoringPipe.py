@@ -7,6 +7,7 @@ import datetime
 import pickle
 import time
 import os
+import heapq
 import glob
 from sklearn.externals import joblib
 from alpha_vantage.timeseries import TimeSeries
@@ -72,7 +73,7 @@ class GetData(luigi.Task):
                 self.mydata.to_csv(outfile)
 
     def output(self):
-        self.now = datetime.datetime.now()
+        self.now = datetime.datetime.now(timezone("America/New_York"))
 
         return luigi.LocalTarget(self.root+"/Data/ScoringData-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
 
@@ -166,7 +167,7 @@ class PrepareDataForScoring(luigi.Task):
 
 
     def output(self):
-        self.now = datetime.datetime.now()
+        self.now = datetime.datetime.now(timezone("America/New_York"))
         return {
                  "X_score": luigi.LocalTarget(self.root + "/Data/X_score-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
                  "RawData": self.input()
@@ -220,29 +221,44 @@ class ScoreModel(luigi.Task):
 
         self.y_pred = model.predict(self.X_score)
 
-        self.Delta = self.y_pred - self.X_score[0, 1, :]
-        index_max = np.argmax(self.Delta)
-        max_company = companiesAlpha[index_max]
+        self.Delta = (self.y_pred - self.X_score[0, 1, :])/self.X_score[0, 1, :]
+        # find top increase in percent
+        #index_max = np.argmax(self.Delta)
+        #max_company = companiesAlpha[index_max]
 
+        # find top 5 companies in percentual increase
+        top5indices = heapq.nlargest(5, range(len(self.Delta)), self.Delta.take)
+        top5companies = [companiesAlpha[i] for i in top5indices]
         self.now = datetime.datetime.now(timezone("America/New_York"))
 
         tomorrow = self.now + datetime.timedelta(days=1)
         tomorrow = tomorrow.strftime("%y%m%d")
-        SlackMsg = "Prediction for " + tomorrow+": "+ max_company + " (+"+ str(100*np.max(self.Delta)) + ")"
+        SlackMsg = "Top 5 predictions for " + tomorrow +" :"
+        # read in slack token
         with open(self.root+"/Meta/slacktoken.txt", "r") as myfile:
             token = myfile.readlines()
+
         sc = SlackClient(token)
         sc.api_call(
             "chat.postMessage",
             channel="predictions",
             text=SlackMsg
         )
+        for company in top5companies:
+            SlackMsg = "- " + company + " (+" + str(100*self.Delta[companiesAlpha.index(company)]) + " %)"
+            sc = SlackClient(token)
+            sc.api_call(
+                "chat.postMessage",
+                channel="predictions",
+                text=SlackMsg
+            )
+
 
         with open(self.output()["y_pred"].path, 'wb') as save_file:
             pickle.dump(self.y_pred, save_file)
 
     def output(self):
-        self.now = datetime.datetime.now()
+        self.now = datetime.datetime.now(timezone("America/New_York"))
         return {
         "X_score": self.input()["X_score"],
         "RawData": self.input()["RawData"],
