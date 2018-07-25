@@ -70,7 +70,6 @@ class GetData(luigi.Task):
             i += 1
             n += 1
             data, metadata = ts.get_daily_adjusted(symbol=company,outputsize="full")
-            print(str(n))
             datatemp = pd.DataFrame(data["5. adjusted close"])
             datatemp.columns = [company]
             finaldata = finaldata.join(datatemp)

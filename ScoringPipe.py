@@ -219,31 +219,36 @@ class ScoreModel(luigi.Task):
                           "TSLA", "TXN", "TSCO", "TMUS", "FOX", "ULTA", "VRSK", "VRTX", "VIAB", "VOD", "WBA", "WDC",
                           "WYNN", "XLNX"]  # "PCLN",
 
+        # Apply the model
         self.y_pred = model.predict(self.X_score)
-
+        # Rescale to original values
+        Scalers = glob.glob(self.root+"/saved_models_pipe/*Scaler*.pkl")
+        RecentScaler = Scalers[-1]
+        scaler = joblib.load(RecentScaler)
+        self.y_pred = scaler.inverse_transform(self.y_pred)
+        self.X_score = scaler.inverse_transform(self.X_score)
+        # Calculate percentual difference between current value and prediction
         self.Delta = (self.y_pred[0] - self.X_score[0, 1, :])/self.X_score[0, 1, :]
-        # find top increase in percent
-        #index_max = np.argmax(self.Delta)
-        #max_company = companiesAlpha[index_max]
-
         # find top 5 companies in percentual increase
         top5indices = heapq.nlargest(5, range(len(self.Delta)), self.Delta.take)
         top5companies = [companiesAlpha[i] for i in top5indices]
+        # Acquire New York Time
         self.now = datetime.datetime.now(timezone("America/New_York"))
-
         tomorrow = self.now + datetime.timedelta(days=1)
         tomorrow = tomorrow.strftime("%y%m%d")
+        # Generate Headline Message
         SlackMsg = "Top 5 predictions for " + tomorrow +" :"
         # read in slack token
         with open(self.root+"/Meta/slacktoken.txt", "r") as myfile:
             token = myfile.readlines()
-
+        # Post Headline Message
         sc = SlackClient(token)
         sc.api_call(
             "chat.postMessage",
             channel="predictions",
             text=SlackMsg
         )
+        # Post predicted increase for top5 companies
         for company in top5companies:
             SlackMsg = "- " + company + " (+" + str(100*self.Delta[companiesAlpha.index(company)]) + " %)"
             sc = SlackClient(token)
@@ -252,7 +257,6 @@ class ScoreModel(luigi.Task):
                 channel="predictions",
                 text=SlackMsg
             )
-
 
         with open(self.output()["y_pred"].path, 'wb') as save_file:
             pickle.dump(self.y_pred, save_file)
