@@ -22,6 +22,8 @@ from alpha_vantage.timeseries import TimeSeries
 # NOTE FH : TO FIX:
 #######################
 class GetData(luigi.Task):
+    root = luigi.Parameter()
+
     def requires(self):
         None
     def run(self):
@@ -43,7 +45,7 @@ class GetData(luigi.Task):
 
         print("Getting alphavantage data...")
 
-        with open("Meta/alphavantage.txt", "r") as myfile:
+        with open(self.root + "/Meta/alphavantage.txt", "r") as myfile:
             alphatoken = myfile.readlines()
         ts = TimeSeries(key=alphatoken, output_format='pandas', retries=5)
         self.mydata = self.getalphadata(companiesAlpha, ts)
@@ -82,12 +84,14 @@ class GetData(luigi.Task):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
 
-        return luigi.LocalTarget("Data/Data-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
+        return luigi.LocalTarget(self.root + "/Data/Data-"+str(self.now.year)+str(self.now.month)+str(self.now.day)+".csv")
 
 
 class CheckInputforNans(luigi.Task):
+    root = luigi.Parameter()
+
     def requires(self):
-        return GetData()
+        return GetData(self.root)
 
     def run(self):
         # load from target
@@ -113,15 +117,16 @@ class CheckInputforNans(luigi.Task):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
 
-        return {"NoNaNs": luigi.LocalTarget("Temp/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
+        return {"NoNaNs": luigi.LocalTarget(self.root + "/Temp/Data-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + "_NoNans.csv"),
                 "RawData" : self.input() }
 
 
 class PrepareDataForANN(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
+    root = luigi.Parameter()
 
     def requires(self):
-        return CheckInputforNans()
+        return CheckInputforNans(self.root)
 
     def run(self):
         Delta = datetime.timedelta(days=1)
@@ -155,7 +160,7 @@ class PrepareDataForANN(luigi.Task):
             scaler = MinMaxScaler()
             mydataNormalizedNP = scaler.fit_transform(mydataNP)
             mydataPP = pd.DataFrame(mydataNormalizedNP)
-            joblib.dump(scaler, 'saved_models_pipe/Scaler_' +  str(self.now.year) + str(self.now.month) + str(self.now.day) + '.pkl')
+            joblib.dump(scaler, self.root + '/saved_models_pipe/Scaler_' +  str(self.now.year) + str(self.now.month) + str(self.now.day) + '.pkl')
         # FIRST define target day, THEN extract image of past data
 
         for i in range(MaxPoints):
@@ -216,10 +221,10 @@ class PrepareDataForANN(luigi.Task):
         Delta = datetime.timedelta(days=1)
         self.now = datetime.datetime.now() - Delta
         return {
-                 "X_train": luigi.LocalTarget("Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "y_train": luigi.LocalTarget("Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "X_valid": luigi.LocalTarget("Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
-                 "y_valid": luigi.LocalTarget("Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "X_train": luigi.LocalTarget(self.root + "/Temp/X_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "y_train": luigi.LocalTarget(self.root + "/Temp/y_train-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "X_valid": luigi.LocalTarget(self.root + "/Temp/X_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
+                 "y_valid": luigi.LocalTarget(self.root + "/Temp/y_valid-" + str(self.now.year) + str(self.now.month) + str(self.now.day) + ".pickle"),
                  "RawData": self.input()["RawData"],
                  "NoNaNs": self.input()["NoNaNs"]
                 }
@@ -229,6 +234,7 @@ class PrepareDataForANN(luigi.Task):
 class LearnModel(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
     Epochs = luigi.Parameter()
+    root  = luigi.Parameter()
 
     def MLP_B2(self):
         model = Sequential()
@@ -247,7 +253,7 @@ class LearnModel(luigi.Task):
         return model
 
     def requires(self):
-        return PrepareDataForANN(self.PredictionTimepoints)
+        return PrepareDataForANN(self.PredictionTimepoints, self.root)
 
     def run(self):
 
@@ -275,7 +281,7 @@ class LearnModel(luigi.Task):
         self.now = datetime.datetime.now() - Delta
 
         # Enter checkpoint filename here
-        checkpointer = ModelCheckpoint(filepath='saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
+        checkpointer = ModelCheckpoint(filepath=self.root + '/saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
             self.PredictionTimepoints + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5',
                                        verbose=1, save_best_only=True)
 
@@ -290,7 +296,7 @@ class LearnModel(luigi.Task):
         "y_valid": self.input()["y_valid"],
         "RawData": self.input()["RawData"],
         "NoNaNs": self.input()["NoNaNs"],
-        "Model": luigi.LocalTarget('saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
+        "Model": luigi.LocalTarget(self.root + '/saved_models_pipe/weights.best.pipe_MLPtype2_B2_Timepoints' +
             self.PredictionTimepoints + "_" + str(self.now.year) + str(self.now.month) + str(self.now.day) +'.hdf5')
     }
 
@@ -299,9 +305,10 @@ class LearnModel(luigi.Task):
 class CleanUp(luigi.Task):
     PredictionTimepoints = luigi.Parameter()
     Epochs = luigi.Parameter()
+    root = luigi.Parameter()
 
     def requires(self):
-        return LearnModel(self.PredictionTimepoints, self.Epochs)
+        return LearnModel(self.PredictionTimepoints, self.Epochs, self.root)
 
     def run(self):
 
@@ -319,9 +326,9 @@ class CleanUp(luigi.Task):
 class StartLearningPipe(luigi.WrapperTask):
     PredictionTimepoints = luigi.Parameter()
     Epochs = luigi.Parameter()
-
+    root = "C:/Users/Fabian/Documents/FinancialForecasting"
     def requires(self):
-        return CleanUp(self.PredictionTimepoints, self.Epochs)
+        return CleanUp(self.PredictionTimepoints, self.Epochs, self.root)
 
 
 if __name__ == '__main__':

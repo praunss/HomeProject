@@ -221,7 +221,7 @@ class ScoreModel(luigi.Task):
 
         self.y_pred = model.predict(self.X_score)
 
-        self.Delta = (self.y_pred - self.X_score[0, 1, :])/self.X_score[0, 1, :]
+        self.Delta = (self.y_pred[0] - self.X_score[0, 1, :])/self.X_score[0, 1, :]
         # find top increase in percent
         #index_max = np.argmax(self.Delta)
         #max_company = companiesAlpha[index_max]
