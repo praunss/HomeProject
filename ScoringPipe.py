@@ -225,10 +225,11 @@ class ScoreModel(luigi.Task):
         Scalers = glob.glob(self.root+"/saved_models_pipe/*Scaler*.pkl")
         RecentScaler = Scalers[-1]
         scaler = joblib.load(RecentScaler)
-        self.y_pred = scaler.inverse_transform(self.y_pred)
-        self.X_score = scaler.inverse_transform(self.X_score)
+        self.y_pred_rescaled = scaler.inverse_transform(self.y_pred)
+        self.X_score_rescaled = scaler.inverse_transform(self.X_score[0])
+        #self.X_score[0, 1, :]
         # Calculate percentual difference between current value and prediction
-        self.Delta = (self.y_pred[0] - self.X_score[0, 1, :])/self.X_score[0, 1, :]
+        self.Delta = (self.y_pred_rescaled[0] - self.X_score_rescaled[1,:])/self.X_score_rescaled[1,:]
         # find top 5 companies in percentual increase
         top5indices = heapq.nlargest(5, range(len(self.Delta)), self.Delta.take)
         top5companies = [companiesAlpha[i] for i in top5indices]
