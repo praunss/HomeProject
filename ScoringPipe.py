@@ -92,17 +92,17 @@ class CheckInputforNans(luigi.Task):
         # load from target
         self.mydata = pd.read_csv(self.input().path, parse_dates = True, index_col = "date")
 
-        # Slice data to get last n days (PredictionTimepoints)
-        Delta = datetime.timedelta(days=int(self.PredictionTimepoints))
+        # Slice data to get last  day (PredictionTimepoints)
+        Delta = datetime.timedelta(days=1)
         self.mydata = self.mydata[self.now-Delta : self.now]
 
         if len(self.mydata)<1:
-            raise ValueError("No Data in last two days!")
+            raise ValueError("No Data for yesterday!")
 
         # Print number of NaNs, throw exception if more than 5
         NumberofRowNans = len(self.mydata[self.mydata.isnull().any(axis=1)])
         if NumberofRowNans > 0:
-            raise ValueError("NaNs detected in scoring data")
+            raise ValueError("NaNs detected in scoring data.")
 
 
     def output(self):
@@ -142,13 +142,34 @@ class PrepareDataForScoring(luigi.Task):
             mydataNP = self.mydata.values
             mydataNormalizedNP = scaler.transform(mydataNP)
             mydataPP = pd.DataFrame(mydataNormalizedNP)
-
+            mydataPP.columns = self.mydata.columns
+            mydataPP.index = self.mydata.index
 
         # START CREATE INPUT VECTORS (IMAGES)
 
-        AdjCloseTemp = mydataPP.iloc[0 : self.PredictionTimepoints]  # e.g. 0 - 249 inclusive, as last index is not sliced
+        AdjCloseTemp = mydataPP.iloc[len(mydataPP)-(self.PredictionTimepoints) : ]  # e.g. 0 - 249 inclusive, as last index is not sliced
 
         AdjCloseTemp_Array = AdjCloseTemp.values
+        ###########################################
+        ###SLACK MESSAGE POST
+        ###########################################
+        SlackMsg = "Timestamps used for scoring (N="+ str(len(AdjCloseTemp)) + "):"
+        sc = SlackClient(token)
+        sc.api_call(
+            "chat.postMessage",
+            channel="predictions",
+            text=SlackMsg
+        )
+        for Timestamp in AdjCloseTemp.index:
+             # Post data to slack for control
+             SlackMsg = Timestamp.strftime("%d.%m.%y")
+             sc = SlackClient(token)
+             sc.api_call(
+                 "chat.postMessage",
+                 channel="predictions",
+                 text=SlackMsg
+             )
+        ###########################################
 
         arrayAdjClosedTemp = np.array(AdjCloseTemp_Array, np.float32)[newaxis, :, :]
         DataCollection = np.append(DataCollection, arrayAdjClosedTemp, axis=0)
